@@ -1,17 +1,10 @@
-import type { SitemapEntry, SitemapFetchOptions } from "./types.js";
-export declare class SitemapFetchError extends Error {
-  readonly status: number | undefined;
-  constructor(
-    message: string,
-    options?: ErrorOptions & {
-      status?: number;
-    },
-  );
+import type { FetchOptions, FetchResult } from "./types.js";
+export declare class FetchError extends Error {
+  readonly url: string;
+  readonly status: number | null;
+  constructor(message: string, url: string, status?: number | null, cause?: unknown);
 }
 export declare class SitemapDepthError extends Error {
   constructor(url: string, depth: number);
 }
-export declare function fetchSitemap(
-  url: string,
-  options?: SitemapFetchOptions,
-): Promise<SitemapEntry[]>;
+export declare function fetchSitemap(url: string, options?: FetchOptions): Promise<FetchResult>;

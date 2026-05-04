@@ -3,13 +3,13 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SitemapDepthError, SitemapFetchError, fetchSitemap } from "../src/fetch.js";
+import { FetchError, SitemapDepthError, fetchSitemap } from "../src/fetch.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixture = (name: string) => readFileSync(resolve(__dirname, "fixtures", name), "utf8");
 
-function mockOk(body: string): Response {
-  return new Response(body, { status: 200 });
+function mockOk(body: string, headers: Record<string, string> = {}): Response {
+  return new Response(body, { status: 200, headers });
 }
 
 describe("fetchSitemap", () => {
@@ -21,11 +21,14 @@ describe("fetchSitemap", () => {
     vi.unstubAllGlobals();
   });
 
-  it("fetches a regular sitemap and returns entries", async () => {
+  it("fetches a regular sitemap and returns entries with meta", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockOk(fixture("urlset.xml"))));
-    const entries = await fetchSitemap("https://example.com/sitemap.xml");
-    expect(entries).toHaveLength(3);
-    expect(entries[0]?.loc).toBe("https://example.com/page1");
+    const result = await fetchSitemap("https://example.com/sitemap.xml");
+    expect(result.entries).toHaveLength(3);
+    expect(result.entries[0]?.loc).toBe("https://example.com/page1");
+    expect(result.meta.url).toBe("https://example.com/sitemap.xml");
+    expect(result.meta.httpStatus).toBe(200);
+    expect(result.meta.redirects).toBe(0);
   });
 
   it("recursively fetches sitemap index and collects all child URLs", async () => {
@@ -40,11 +43,13 @@ describe("fetchSitemap", () => {
     });
     vi.stubGlobal("fetch", mockFetch);
 
-    const entries = await fetchSitemap("https://example.com/sitemap-index.xml");
-    const locs = entries.map((e) => e.loc);
+    const result = await fetchSitemap("https://example.com/sitemap-index.xml");
+    const locs = result.entries.map((e) => e.loc);
     expect(locs).toContain("https://example.com/page1");
     expect(locs).toContain("https://example.com/nested1");
-    expect(entries).toHaveLength(5);
+    expect(result.entries).toHaveLength(5);
+    // meta describes the initial fetch only
+    expect(result.meta.url).toBe("https://example.com/sitemap-index.xml");
   });
 
   it("throws SitemapDepthError when maxDepth is exceeded", async () => {
@@ -66,22 +71,22 @@ describe("fetchSitemap", () => {
         return Promise.reject(new Error(`Unexpected: ${url}`));
       }),
     );
-    const entries = await fetchSitemap("https://example.com/a.xml");
-    expect(entries).toEqual([]);
+    const result = await fetchSitemap("https://example.com/a.xml");
+    expect(result.entries).toEqual([]);
   });
 
-  it("throws SitemapFetchError on HTTP error status", async () => {
+  it("throws FetchError on HTTP error status", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("Not Found", { status: 404 })));
     const err = await fetchSitemap("https://example.com/sitemap.xml").catch((e) => e);
-    expect(err).toBeInstanceOf(SitemapFetchError);
-    expect((err as SitemapFetchError).status).toBe(404);
+    expect(err).toBeInstanceOf(FetchError);
+    expect((err as FetchError).status).toBe(404);
   });
 
-  it("throws SitemapFetchError on network failure", async () => {
+  it("throws FetchError on network failure with status null", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Network failure")));
-    await expect(fetchSitemap("https://example.com/sitemap.xml")).rejects.toThrow(
-      SitemapFetchError,
-    );
+    const err = await fetchSitemap("https://example.com/sitemap.xml").catch((e) => e);
+    expect(err).toBeInstanceOf(FetchError);
+    expect((err as FetchError).status).toBeNull();
   });
 
   it("passes custom userAgent in request headers", async () => {
@@ -100,6 +105,54 @@ describe("fetchSitemap", () => {
     );
   });
 
+  describe("redirects", () => {
+    it("follows redirects manually and counts them", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValueOnce(
+            new Response(null, {
+              status: 301,
+              headers: { Location: "https://example.com/sitemap-final.xml" },
+            }),
+          )
+          .mockResolvedValueOnce(mockOk(fixture("urlset.xml"))),
+      );
+      const result = await fetchSitemap("https://example.com/sitemap.xml");
+      expect(result.meta.redirects).toBe(1);
+      expect(result.meta.finalUrl).toBe("https://example.com/sitemap-final.xml");
+    });
+
+    it("throws FetchError when redirect cap is exceeded", async () => {
+      const redirect = new Response(null, {
+        status: 301,
+        headers: { Location: "https://example.com/loop.xml" },
+      });
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(redirect));
+      const err = await fetchSitemap("https://example.com/sitemap.xml", {
+        maxRedirects: 2,
+      }).catch((e) => e);
+      expect(err).toBeInstanceOf(FetchError);
+    });
+
+    it("maxRedirects: 0 disables redirect following", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValueOnce(
+          new Response(null, {
+            status: 301,
+            headers: { Location: "https://example.com/sitemap-final.xml" },
+          }),
+        ),
+      );
+      const err = await fetchSitemap("https://example.com/sitemap.xml", {
+        maxRedirects: 0,
+      }).catch((e) => e);
+      expect(err).toBeInstanceOf(FetchError);
+    });
+  });
+
   describe("gzip support", () => {
     it("decompresses when Content-Type contains gzip", async () => {
       const body = gzipSync(Buffer.from(fixture("urlset.xml")));
@@ -112,17 +165,17 @@ describe("fetchSitemap", () => {
           }),
         ),
       );
-      const entries = await fetchSitemap("https://example.com/sitemap.xml");
-      expect(entries).toHaveLength(3);
-      expect(entries[0]?.loc).toBe("https://example.com/page1");
+      const result = await fetchSitemap("https://example.com/sitemap.xml");
+      expect(result.entries).toHaveLength(3);
+      expect(result.entries[0]?.loc).toBe("https://example.com/page1");
     });
 
     it("decompresses when URL ends with .gz", async () => {
       const body = gzipSync(Buffer.from(fixture("urlset.xml")));
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
-      const entries = await fetchSitemap("https://example.com/sitemap.xml.gz");
-      expect(entries).toHaveLength(3);
-      expect(entries[0]?.loc).toBe("https://example.com/page1");
+      const result = await fetchSitemap("https://example.com/sitemap.xml.gz");
+      expect(result.entries).toHaveLength(3);
+      expect(result.entries[0]?.loc).toBe("https://example.com/page1");
     });
   });
 
@@ -143,11 +196,44 @@ describe("fetchSitemap", () => {
       }),
     );
 
-    const entries = await fetchSitemap("https://example.com/index.xml", {
+    const result = await fetchSitemap("https://example.com/index.xml", {
       concurrency: 1,
     });
-    expect(entries).toHaveLength(3);
+    expect(result.entries).toHaveLength(3);
     const childCalls = callOrder.filter((u) => u !== "https://example.com/index.xml");
     expect(childCalls).toHaveLength(3);
+  });
+
+  it("throws FetchError when body exceeds maxSizeBytes", async () => {
+    const bigXml = `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${"<url><loc>https://example.com/x</loc></url>".repeat(1000)}</urlset>`;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockOk(bigXml)));
+    const err = await fetchSitemap("https://example.com/sitemap.xml", {
+      maxSizeBytes: 100,
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(FetchError);
+  });
+
+  it("handles a 2xx response with a null body", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
+    await expect(fetchSitemap("https://example.com/sitemap.xml")).rejects.toThrow();
+  });
+
+  it("throws FetchError when a redirect is missing its Location header", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 301 })));
+    const err = await fetchSitemap("https://example.com/sitemap.xml").catch((e) => e);
+    expect(err).toBeInstanceOf(FetchError);
+  });
+
+  it("throws FetchError when a redirect has an unparseable Location URL", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(null, { status: 301, headers: { Location: "http://[bad" } }),
+        ),
+    );
+    const err = await fetchSitemap("https://example.com/sitemap.xml").catch((e) => e);
+    expect(err).toBeInstanceOf(FetchError);
   });
 });

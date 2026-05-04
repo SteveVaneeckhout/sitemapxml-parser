@@ -17,11 +17,13 @@ Requires Node.js >= 24.15.0.
 ```ts
 import { fetchSitemap } from "sitemapxml";
 
-const urls = await fetchSitemap("https://example.com/sitemap.xml");
+const { entries, meta } = await fetchSitemap("https://example.com/sitemap.xml");
 
-for (const url of urls) {
+for (const url of entries) {
   console.log(url.loc, url.lastmod);
 }
+
+console.log(meta.httpStatus, meta.redirects); // describes the initial fetch
 ```
 
 `fetchSitemap` transparently handles:
@@ -29,6 +31,7 @@ for (const url of urls) {
 - **Regular sitemap** (`<urlset>`) — returns the URL entries directly.
 - **Sitemap index** (`<sitemapindex>`) — fetches each child sitemap concurrently and returns all URL entries combined.
 - **Gzip-compressed sitemaps** (`.gz`) — detected by `Content-Type` header or `.gz` URL suffix and decompressed automatically.
+- **Redirects** — followed manually up to `maxRedirects`.
 
 ### Parse XML directly
 
@@ -50,18 +53,20 @@ if (parsed.type === "urlset") {
 
 ### `fetchSitemap(url, options?)`
 
-Downloads and parses a sitemap from a URL. Recursively resolves sitemap index files.
+Downloads and parses a sitemap from a full URL. Recursively resolves sitemap index files.
 
 ```ts
-fetchSitemap(url: string, options?: SitemapFetchOptions): Promise<SitemapEntry[]>
+fetchSitemap(url: string, options?: FetchOptions): Promise<FetchResult>
 ```
 
-| Option        | Type     | Default                    | Description                                                                                            |
-| ------------- | -------- | -------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `maxDepth`    | `number` | `10`                       | Maximum recursion depth for sitemap index links. Depth 0 means the initial URL only, no child fetches. |
-| `timeout`     | `number` | `10000`                    | Per-request timeout in milliseconds. Uses `AbortSignal.timeout()` internally.                          |
-| `userAgent`   | `string` | `'sitemapxml-fetcher/1.0'` | `User-Agent` header sent with every request.                                                           |
-| `concurrency` | `number` | `5`                        | Maximum number of child sitemaps fetched in parallel when resolving a sitemap index.                   |
+| Option         | Type     | Default                    | Description                                                                                            |
+| -------------- | -------- | -------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `maxDepth`     | `number` | `10`                       | Maximum recursion depth for sitemap index links. Depth 0 means the initial URL only, no child fetches. |
+| `timeoutMs`    | `number` | `10000`                    | Per-request timeout in milliseconds.                                                                   |
+| `userAgent`    | `string` | `'sitemapxml-fetcher/1.0'` | `User-Agent` header sent with every request.                                                           |
+| `maxRedirects` | `number` | `5`                        | Maximum redirects to follow per request (0 disables).                                                  |
+| `maxSizeBytes` | `number` | `50 * 1024 * 1024`         | Maximum response body size in bytes.                                                                   |
+| `concurrency`  | `number` | `5`                        | Maximum number of child sitemaps fetched in parallel when resolving a sitemap index.                   |
 
 ### `parseSitemapXml(xml)`
 
@@ -76,9 +81,9 @@ parseSitemapXml(xml: string): ParsedSitemap
 ```ts
 interface SitemapEntry {
   loc: string;
-  lastmod?: string; // ISO 8601 date string (may be partial, e.g. "2024-01")
+  lastmod?: string;
   changefreq?: ChangeFreq;
-  priority?: number; // 0.0 – 1.0
+  priority?: number;
 }
 
 type ChangeFreq = "always" | "hourly" | "daily" | "weekly" | "monthly" | "yearly" | "never";
@@ -96,23 +101,34 @@ interface SitemapIndex {
   sitemaps: SitemapIndexEntry[];
 }
 
-interface SitemapIndexEntry {
-  loc: string;
-  lastmod?: string;
+// Returned by fetchSitemap()
+interface FetchResult {
+  entries: SitemapEntry[];
+  meta: FetchMeta;
+}
+
+interface FetchMeta {
+  url: string; // the URL that was requested
+  finalUrl: string; // URL after redirects
+  httpStatus: number | null;
+  contentType: string | null;
+  redirects: number;
 }
 ```
+
+`meta` describes the **initial** HTTP request only. When the initial URL is a sitemap index, child sitemap fetches happen but their HTTP details are not exposed.
 
 ## Errors
 
 All errors are typed and can be caught with `instanceof`.
 
 ```ts
-import { fetchSitemap, SitemapFetchError, SitemapDepthError, SitemapParseError } from "sitemapxml";
+import { fetchSitemap, FetchError, SitemapDepthError, SitemapParseError } from "sitemapxml";
 
 try {
-  const urls = await fetchSitemap("https://example.com/sitemap.xml");
+  const { entries } = await fetchSitemap("https://example.com/sitemap.xml");
 } catch (err) {
-  if (err instanceof SitemapFetchError) {
+  if (err instanceof FetchError) {
     console.error("HTTP error", err.status, err.message);
   } else if (err instanceof SitemapDepthError) {
     console.error("Sitemap index too deeply nested:", err.message);
@@ -122,11 +138,11 @@ try {
 }
 ```
 
-| Error               | When thrown                                                                         |
-| ------------------- | ----------------------------------------------------------------------------------- |
-| `SitemapFetchError` | Non-2xx HTTP response or network failure. Has a `.status` property for HTTP errors. |
-| `SitemapDepthError` | A sitemap index chain exceeded `maxDepth`.                                          |
-| `SitemapParseError` | Malformed XML or unrecognized root element.                                         |
+| Error               | When thrown                                                                                                                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `FetchError`        | Non-2xx HTTP response, network failure, timeout, redirect cap exceeded, body size cap exceeded. Has a `.status` property (number for HTTP errors, `null` for network/timeout). |
+| `SitemapDepthError` | A sitemap index chain exceeded `maxDepth`.                                                                                                                                     |
+| `SitemapParseError` | Malformed XML or unrecognized root element.                                                                                                                                    |
 
 ## License
 
