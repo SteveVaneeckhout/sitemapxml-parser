@@ -8,6 +8,37 @@ export class SitemapParseError extends Error {
   }
 }
 
+const CHANGE_FREQS = new Set<string>([
+  "always",
+  "hourly",
+  "daily",
+  "weekly",
+  "monthly",
+  "yearly",
+  "never",
+]);
+
+/**
+ * `changefreq` is typed as a seven-value union, so anything outside it must not
+ * reach the caller — a `switch` the compiler believes is exhaustive would fall
+ * through on a value we invented. Case is normalised, then unknown values are
+ * dropped rather than passed off as valid.
+ */
+function parseChangeFreq(raw: unknown): ChangeFreq | undefined {
+  const value = String(raw).trim().toLowerCase();
+  return CHANGE_FREQS.has(value) ? (value as ChangeFreq) : undefined;
+}
+
+/**
+ * `Number("high")` is `NaN`, which is typed `number`, serialises to `null` and
+ * poisons any comparison it touches. sitemaps.org bounds priority to 0.0–1.0,
+ * so anything else is dropped too.
+ */
+function parsePriority(raw: unknown): number | undefined {
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 && value <= 1 ? value : undefined;
+}
+
 // Constructed once — XMLParser is stateless after construction
 const parser = new XMLParser({
   ignoreAttributes: true,
@@ -51,8 +82,14 @@ function parseUrlEntry(entry: unknown): SitemapEntry {
   }
   const result: SitemapEntry = { loc };
   if (e["lastmod"] !== undefined) result.lastmod = String(e["lastmod"]);
-  if (e["changefreq"] !== undefined) result.changefreq = String(e["changefreq"]) as ChangeFreq;
-  if (e["priority"] !== undefined) result.priority = Number(e["priority"]);
+  if (e["changefreq"] !== undefined) {
+    const changefreq = parseChangeFreq(e["changefreq"]);
+    if (changefreq !== undefined) result.changefreq = changefreq;
+  }
+  if (e["priority"] !== undefined) {
+    const priority = parsePriority(e["priority"]);
+    if (priority !== undefined) result.priority = priority;
+  }
   return result;
 }
 

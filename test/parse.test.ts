@@ -44,6 +44,45 @@ describe("parseSitemapXml", () => {
       expect("priority" in (entry ?? {})).toBe(false);
     });
 
+    // changefreq is a seven-value union and priority is a number in 0.0-1.0.
+    // Values outside those must not reach the caller wearing those types.
+    it("drops a changefreq outside the spec's vocabulary", () => {
+      const xml = `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://example.com/a</loc><changefreq>occasionally</changefreq></url></urlset>`;
+      const result = parseSitemapXml(xml);
+      if (result.type !== "urlset") return;
+      expect("changefreq" in (result.urls[0] ?? {})).toBe(false);
+    });
+
+    it("normalises the case of a valid changefreq", () => {
+      const xml = `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://example.com/a</loc><changefreq>Daily</changefreq></url></urlset>`;
+      const result = parseSitemapXml(xml);
+      if (result.type !== "urlset") return;
+      expect(result.urls[0]?.changefreq).toBe("daily");
+    });
+
+    it("drops a non-numeric priority rather than yielding NaN", () => {
+      const xml = `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://example.com/a</loc><priority>high</priority></url></urlset>`;
+      const result = parseSitemapXml(xml);
+      if (result.type !== "urlset") return;
+      expect("priority" in (result.urls[0] ?? {})).toBe(false);
+    });
+
+    it("drops a priority outside 0.0-1.0", () => {
+      const xml = `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://example.com/a</loc><priority>7</priority></url><url><loc>https://example.com/b</loc><priority>-1</priority></url></urlset>`;
+      const result = parseSitemapXml(xml);
+      if (result.type !== "urlset") return;
+      expect("priority" in (result.urls[0] ?? {})).toBe(false);
+      expect("priority" in (result.urls[1] ?? {})).toBe(false);
+    });
+
+    it("keeps the boundary priorities 0 and 1", () => {
+      const xml = `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://example.com/a</loc><priority>0</priority></url><url><loc>https://example.com/b</loc><priority>1.0</priority></url></urlset>`;
+      const result = parseSitemapXml(xml);
+      if (result.type !== "urlset") return;
+      expect(result.urls[0]?.priority).toBe(0);
+      expect(result.urls[1]?.priority).toBe(1);
+    });
+
     it("returns empty urls array for empty <urlset>", () => {
       const xml = `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>`;
       const result = parseSitemapXml(xml);

@@ -88,6 +88,12 @@ interface SitemapEntry {
 
 type ChangeFreq = "always" | "hourly" | "daily" | "weekly" | "monthly" | "yearly" | "never";
 
+// `changefreq` and `priority` are validated against the sitemaps.org spec, so
+// the values you get always match the types above. A `changefreq` outside the
+// vocabulary, or a `priority` that is not a number within 0.0–1.0, is dropped
+// rather than passed through — the field is simply absent. Recognised
+// `changefreq` values are lowercased, so "Daily" arrives as "daily".
+
 // Returned by parseSitemapXml()
 type ParsedSitemap = UrlSet | SitemapIndex;
 
