@@ -147,4 +147,62 @@ describe("parseSitemapXml", () => {
       expect(() => parseSitemapXml(xml)).toThrow(SitemapParseError);
     });
   });
+
+  describe("character references", () => {
+    const urlset = (body: string) =>
+      `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${body}</urlset>`;
+    const urls = (xml: string) => {
+      const result = parseSitemapXml(xml);
+      if (result.type !== "urlset") throw new Error("expected a urlset");
+      return result.urls;
+    };
+
+    it("decodes the named XML entities", () => {
+      const [entry] = urls(urlset(`<url><loc>https://example.com/a?x=1&amp;y=2</loc></url>`));
+      expect(entry?.loc).toBe("https://example.com/a?x=1&y=2");
+    });
+
+    it("decodes hexadecimal character references in lastmod", () => {
+      // A real CMS escapes the timezone '+' this way. Left encoded, the value
+      // is a string no date parser accepts.
+      const [entry] = urls(
+        urlset(
+          `<url><loc>https://example.com/a</loc><lastmod>2026-06-05T08:02:21&#x2B;00:00</lastmod></url>`,
+        ),
+      );
+      expect(entry?.lastmod).toBe("2026-06-05T08:02:21+00:00");
+      expect(Number.isNaN(Date.parse(entry?.lastmod ?? ""))).toBe(false);
+    });
+
+    it("decodes decimal character references in lastmod", () => {
+      const [entry] = urls(
+        urlset(
+          `<url><loc>https://example.com/a</loc><lastmod>2026-06-05T08:02:21&#43;00:00</lastmod></url>`,
+        ),
+      );
+      expect(entry?.lastmod).toBe("2026-06-05T08:02:21+00:00");
+    });
+
+    it("decodes character references in loc, which would otherwise be a wrong URL", () => {
+      const [entry] = urls(urlset(`<url><loc>https://example.com/caf&#xE9;/a&#x2F;b</loc></url>`));
+      expect(entry?.loc).toBe("https://example.com/café/a/b");
+    });
+
+    it("decodes character references in a sitemap index loc", () => {
+      const xml = `<?xml version="1.0"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><sitemap><loc>https://example.com/s.xml?a=1&#x26;b=2</loc></sitemap></sitemapindex>`;
+      const result = parseSitemapXml(xml);
+      expect(result.type).toBe("sitemapindex");
+      if (result.type !== "sitemapindex") return;
+      expect(result.sitemaps[0]?.loc).toBe("https://example.com/s.xml?a=1&b=2");
+    });
+
+    it("leaves an unescaped value alone", () => {
+      const [entry] = urls(
+        urlset(
+          `<url><loc>https://example.com/a</loc><lastmod>2026-06-05T08:02:21+00:00</lastmod></url>`,
+        ),
+      );
+      expect(entry?.lastmod).toBe("2026-06-05T08:02:21+00:00");
+    });
+  });
 });

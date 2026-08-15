@@ -33,11 +33,27 @@ function parsePriority(raw) {
     const value = Number(raw);
     return Number.isFinite(value) && value >= 0 && value <= 1 ? value : undefined;
 }
-// Constructed once — XMLParser is stateless after construction
+/**
+ * Constructed once — XMLParser is stateless after construction.
+ *
+ * `htmlEntities` is what decodes numeric character references, `&#x2B;` and
+ * `&#43;`, despite those being core XML rather than anything HTML-specific.
+ * Without it fast-xml-parser resolves the five named XML entities and passes
+ * numeric ones through as literal text, so a real sitemap writing
+ * `<lastmod>2026-06-05T08:02:21&#x2B;00:00</lastmod>` — valid XML, and what at
+ * least one CMS emits — yields a date string no date parser accepts. The same
+ * gap silently corrupts any `<loc>` that escapes a character numerically.
+ *
+ * It also enables the HTML named entities (`&nbsp;`, `&copy;`), which are not
+ * defined in XML. Decoding them is the lenient choice, and the right one here:
+ * this parser reads sitemaps that generators really produce rather than
+ * enforcing the spec against them.
+ */
 const parser = new XMLParser({
     ignoreAttributes: true,
     parseTagValue: true,
     trimValues: true,
+    htmlEntities: true,
     isArray: (tagName) => tagName === "url" || tagName === "sitemap",
 });
 export function parseSitemapXml(xml) {
