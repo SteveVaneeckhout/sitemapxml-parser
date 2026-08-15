@@ -1,6 +1,6 @@
 {
   "name": "sitemapxml",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Downloads and parses sitemap.xml files, including sitemap index files",
   "keywords": [
     "parser",
